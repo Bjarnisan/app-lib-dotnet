@@ -102,7 +102,7 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_KeepsStoredObjectWhenTheReferenceIsReadOnly()
+    public void RestoreReadOnlyFields_KeepsTheWholeObjectWhenItIsReadOnly()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
@@ -130,10 +130,12 @@ public class JsonSchemaReadOnlyFieldsTests
         Assert.Equal("Testbedrift AS", result.Organisation!.Name);
     }
 
-    [Fact]
-    public void RestoreReadOnlyFields_RemovesReadOnlyFieldsTheClientAdds()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RestoreReadOnlyFields_ClearsReadOnlyFieldsTheClientFillsIn(bool submitterIsStored)
     {
-        var stored = new Model { Message = "Hello" };
+        var stored = new Model { Submitter = submitterIsStored ? new Person() : null, Message = "Hello" };
         var fromClient = Copy(stored);
         fromClient.Submitter = new Person { Name = "Kari Nordmann", Email = "kari@example.com" };
 
@@ -157,7 +159,7 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_DoesNotSupportReadOnlyFieldsInsideLists()
+    public void RestoreReadOnlyFields_KeepsChangesInsideListsAndLogsAWarning()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
@@ -227,7 +229,13 @@ public class JsonSchemaReadOnlyFieldsTests
                     "Person": {
                         "allOf": [{ "$ref": "#/$defs/Named" }],
                         "properties": {
-                            "guardian": { "$ref": "#/$defs/Person" }
+                            "guardian": { "$ref": "#/$defs/Person" },
+                            "address": { "$ref": "#/$defs/Address" }
+                        }
+                    },
+                    "Address": {
+                        "properties": {
+                            "street": { "type": "string" }
                         }
                     },
                     "Named": {
@@ -240,22 +248,58 @@ public class JsonSchemaReadOnlyFieldsTests
             }
             """
         );
-        List<string> fieldsInLists = [];
+        List<string> listsWithReadOnlyFields = [];
 
-        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, fieldsInLists);
+        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, listsWithReadOnlyFields);
 
-        // The recursion stops at the reference that is already being followed, so guardian is left out
+        // The recursion stops at the reference that is already being followed, so guardian is left out,
+        // and address has no read-only fields
         Assert.NotNull(node);
         var person = Assert.Single(node.Properties).Value;
         var name = Assert.Single(person.Properties).Value;
         Assert.True(name.IsReadOnly);
-        Assert.Empty(fieldsInLists);
+        Assert.Empty(listsWithReadOnlyFields);
+    }
+
+    [Fact]
+    public void FromSchema_MergesTheReadOnlyPropertiesOfEachSubschema()
+    {
+        using var schema = JsonDocument.Parse(
+            """
+            {
+                "allOf": [
+                    { "properties": { "contact": { "properties": { "email": { "readOnly": true } } } } },
+                    { "properties": { "contact": { "properties": { "phone": { "readOnly": true } } } } }
+                ]
+            }
+            """
+        );
+
+        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []);
+
+        Assert.NotNull(node);
+        var contact = Assert.Single(node.Properties).Value;
+        Assert.Equal(new[] { "email", "phone" }, contact.Properties.Keys.Order());
+    }
+
+    [Theory]
+    [InlineData("other.schema.json#/$defs/Person")]
+    [InlineData("#/$defs/Missing")]
+    public void FromSchema_ThrowsOnReferencesItCannotResolve(string reference)
+    {
+        using var schema = JsonDocument.Parse(
+            $$"""{ "properties": { "person": { "$ref": "{{reference}}" } }, "$defs": {} }"""
+        );
+
+        Assert.Throws<JsonException>(() => JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []));
     }
 
     [Fact]
     public void FromSchema_ReturnsNullWhenNothingIsReadOnly()
     {
-        using var schema = JsonDocument.Parse("""{ "properties": { "name": { "type": "string" } } }""");
+        using var schema = JsonDocument.Parse(
+            """{ "properties": { "name": { "type": "string" }, "anything": true } }"""
+        );
 
         var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []);
 

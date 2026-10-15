@@ -55,14 +55,10 @@ internal sealed class JsonSchemaReadOnlyFields
             return currentModel;
         }
 
-        var previous = JsonSerializer.SerializeToNode(previousModel) as JsonObject;
-        if (JsonSerializer.SerializeToNode(currentModel) is not JsonObject current)
-        {
-            return currentModel;
-        }
-
+        var previous = SerializeToJsonObject(previousModel);
+        var current = SerializeToJsonObject(currentModel);
         var restoredFields = new List<string>();
-        Restore(readOnlyNode, previous, current, string.Empty, restoredFields);
+        RestoreReadOnlyProperties(readOnlyNode, previous, current, string.Empty, restoredFields);
         if (restoredFields.Count == 0)
         {
             return currentModel;
@@ -73,8 +69,14 @@ internal sealed class JsonSchemaReadOnlyFields
             string.Join(", ", restoredFields),
             dataType.Id
         );
-        return current.Deserialize(currentModel.GetType())
-            ?? throw new InvalidOperationException("Deserializing the corrected data model returned null");
+        // ! Deserializing a JSON object never returns null
+        return current.Deserialize(currentModel.GetType())!;
+    }
+
+    private static JsonObject SerializeToJsonObject(object model)
+    {
+        // ! A data model always serializes to a JSON object, never to null
+        return JsonSerializer.SerializeToNode(model)!.AsObject();
     }
 
     private ReadOnlyNode? LoadReadOnlyNode(string dataTypeId)
@@ -94,13 +96,13 @@ internal sealed class JsonSchemaReadOnlyFields
         }
 
         using var document = JsonDocument.Parse(schema);
-        var fieldsInLists = new List<string>();
-        var readOnlyNode = ReadOnlyNode.FromSchema(document.RootElement, fieldsInLists);
-        if (fieldsInLists.Count > 0)
+        var listsWithReadOnlyFields = new List<string>();
+        var readOnlyNode = ReadOnlyNode.FromSchema(document.RootElement, listsWithReadOnlyFields);
+        if (listsWithReadOnlyFields.Count > 0)
         {
             _logger.LogWarning(
-                "Read-only fields inside lists are not supported and can still be changed: {Fields} in data type {DataTypeId}",
-                string.Join(", ", fieldsInLists),
+                "Read-only fields inside lists are not supported and can still be changed: {Lists} in data type {DataTypeId}",
+                string.Join(", ", listsWithReadOnlyFields),
                 dataTypeId
             );
         }
@@ -108,7 +110,7 @@ internal sealed class JsonSchemaReadOnlyFields
         return readOnlyNode;
     }
 
-    private static void Restore(
+    private static void RestoreReadOnlyProperties(
         ReadOnlyNode node,
         JsonObject? previous,
         JsonObject current,
@@ -133,6 +135,7 @@ internal sealed class JsonSchemaReadOnlyFields
                     }
                     else
                     {
+                        // Nothing was stored, so the property gets its default value when deserialized
                         current.Remove(name);
                     }
                     restoredFields.Add(fieldPath);
@@ -140,13 +143,13 @@ internal sealed class JsonSchemaReadOnlyFields
             }
             else if (currentValue is JsonObject currentObject)
             {
-                Restore(child, previousValue as JsonObject, currentObject, fieldPath, restoredFields);
+                RestoreReadOnlyProperties(child, previousValue as JsonObject, currentObject, fieldPath, restoredFields);
             }
             else if (previousValue is JsonObject previousObject)
             {
                 // The client removed the object, but the read-only fields inside it must stay
                 var restoredObject = new JsonObject();
-                Restore(child, previousObject, restoredObject, fieldPath, restoredFields);
+                RestoreReadOnlyProperties(child, previousObject, restoredObject, fieldPath, restoredFields);
                 if (restoredObject.Count > 0)
                 {
                     current[name] = restoredObject;
@@ -170,15 +173,15 @@ internal sealed class JsonSchemaReadOnlyFields
         /// Returns the read-only properties of <paramref name="schema"/>, or null when it has none.
         /// </summary>
         /// <param name="schema">The root of a JSON schema</param>
-        /// <param name="fieldsInLists">Paths to read-only fields inside lists, which are not supported</param>
-        public static ReadOnlyNode? FromSchema(JsonElement schema, List<string> fieldsInLists) =>
-            FromSchema(schema, schema, [], fieldsInLists, string.Empty);
+        /// <param name="listsWithReadOnlyFields">Paths to lists with read-only fields inside their items, which are not supported</param>
+        public static ReadOnlyNode? FromSchema(JsonElement schema, List<string> listsWithReadOnlyFields) =>
+            FromSchema(schema, schema, [], listsWithReadOnlyFields, string.Empty);
 
         private static ReadOnlyNode? FromSchema(
             JsonElement root,
             JsonElement schema,
             HashSet<string> refsInPath,
-            List<string> fieldsInLists,
+            List<string> listsWithReadOnlyFields,
             string path
         )
         {
@@ -200,7 +203,9 @@ internal sealed class JsonSchemaReadOnlyFields
                 && refsInPath.Add(referencePath)
             )
             {
-                node.Merge(FromSchema(root, ResolveReference(root, referencePath), refsInPath, fieldsInLists, path));
+                node.Merge(
+                    FromSchema(root, ResolveReference(root, referencePath), refsInPath, listsWithReadOnlyFields, path)
+                );
                 refsInPath.Remove(referencePath);
             }
 
@@ -210,7 +215,7 @@ internal sealed class JsonSchemaReadOnlyFields
                 {
                     foreach (var subSchema in subSchemas.EnumerateArray())
                     {
-                        node.Merge(FromSchema(root, subSchema, refsInPath, fieldsInLists, path));
+                        node.Merge(FromSchema(root, subSchema, refsInPath, listsWithReadOnlyFields, path));
                     }
                 }
             }
@@ -220,7 +225,7 @@ internal sealed class JsonSchemaReadOnlyFields
                 foreach (var property in properties.EnumerateObject())
                 {
                     var propertyPath = path.Length == 0 ? property.Name : $"{path}.{property.Name}";
-                    var child = FromSchema(root, property.Value, refsInPath, fieldsInLists, propertyPath);
+                    var child = FromSchema(root, property.Value, refsInPath, listsWithReadOnlyFields, propertyPath);
                     if (child is not null)
                     {
                         node.MergeProperty(property.Name, child);
@@ -233,7 +238,7 @@ internal sealed class JsonSchemaReadOnlyFields
                 && FromSchema(root, items, refsInPath, [], $"{path}[]") is not null
             )
             {
-                fieldsInLists.Add($"{path}[]");
+                listsWithReadOnlyFields.Add($"{path}[]");
             }
 
             return node.IsReadOnly || node.Properties.Count > 0 ? node : null;
