@@ -4,6 +4,7 @@ using Altinn.App.Api.Helpers.Patch;
 using Altinn.App.Api.Models;
 using Altinn.App.Core.Configuration;
 using Altinn.App.Core.Features;
+using Altinn.App.Core.Features.Auth;
 using Altinn.App.Core.Helpers.Serialization;
 using Altinn.App.Core.Internal.App;
 using Altinn.App.Core.Internal.AppModel;
@@ -22,6 +23,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using DataType = Altinn.Platform.Storage.Interface.Models.DataType;
 
@@ -123,6 +126,14 @@ public sealed class PatchServiceTests : IDisposable
         services.AddSingleton(_modelSerializationService);
         services.Configure<GeneralSettings>(_ => { });
         services.AddSingleton(_hostEnvironment.Object);
+        services.AddSingleton(
+            new JsonSchemaReadOnlyFields(
+                _appResourcesMock.Object,
+                Mock.Of<IAuthenticationContext>(),
+                Options.Create(new AppSettings()),
+                NullLogger<JsonSchemaReadOnlyFields>.Instance
+            )
+        );
 
         _serviceProvider = services.BuildStrictServiceProvider();
         var validatorFactory = _serviceProvider.GetRequiredService<IValidatorFactory>();

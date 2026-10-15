@@ -144,6 +144,7 @@ internal sealed record InstancesControllerFixture(IServiceProvider ServiceProvid
         services.AddTransient(_ => httpContextMock.Object);
 
         services.AddTransient<InternalPatchService>();
+        services.AddSingleton<JsonSchemaReadOnlyFields>();
         services.AddTransient<ModelSerializationService>();
         services.AddTransient<InstanceDataUnitOfWorkInitializer>();
 

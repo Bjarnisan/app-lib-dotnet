@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using Altinn.App.Api.Models;
 using Altinn.App.Api.Tests.Data;
 using Altinn.App.Api.Tests.Data.apps.tdd.contributer_restriction.models;
+using Altinn.App.Core.Configuration;
 using Altinn.App.Core.Constants;
 using Altinn.App.Core.Features;
 using Altinn.App.Core.Internal.Language;
@@ -1110,6 +1111,71 @@ public class DataControllerPatchTests : ApiTestBase, IClassFixture<WebApplicatio
         (await action.Should().ThrowAsync<Exception>())
             .Which.Message.Should()
             .Contain("changed by validators");
+    }
+
+    [Theory]
+    [InlineData(true, null)]
+    [InlineData(false, "fromClient")]
+    public async Task ReadOnlyFieldInJsonSchema_KeepsStoredValueWhenEnforced(bool enforce, string? expectedTags)
+    {
+        OverrideServicesForThisTest = services =>
+            services.Configure<AppSettings>(settings => settings.EnforceJsonSchemaReadOnly = enforce);
+        _dataProcessorMock
+            .Setup(p =>
+                p.ProcessDataWrite(
+                    It.IsAny<Instance>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<object>(),
+                    It.IsAny<object?>(),
+                    null
+                )
+            )
+            .Returns(Task.CompletedTask);
+
+        // melding.tags is marked "readOnly": true in default.schema.json
+        var patch = new JsonPatch(
+            PatchOperation.Replace(JsonPointer.Create("melding", "name"), JsonNode.Parse("\"Ola Olsen\"")),
+            PatchOperation.Replace(JsonPointer.Create("melding", "tags"), JsonNode.Parse("\"fromClient\""))
+        );
+
+        var (_, _, parsedResponse) = await CallPatchApi<DataPatchResponse>(patch, null, HttpStatusCode.OK);
+
+        var newModel = parsedResponse.NewDataModel.Should().BeOfType<JsonElement>().Which.Deserialize<Skjema>()!;
+        newModel.Melding!.Name.Should().Be("Ola Olsen");
+        newModel.Melding.Tags.Should().Be(expectedTags);
+    }
+
+    [Fact]
+    public async Task ReadOnlyFieldInJsonSchema_CanBeSetByDataProcessor()
+    {
+        OverrideServicesForThisTest = services =>
+            services.Configure<AppSettings>(settings => settings.EnforceJsonSchemaReadOnly = true);
+        _dataProcessorMock
+            .Setup(p =>
+                p.ProcessDataWrite(
+                    It.IsAny<Instance>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<object>(),
+                    It.IsAny<object?>(),
+                    null
+                )
+            )
+            .Returns(
+                (Instance instance, Guid? dataGuid, object skjema, object? existingData, string language) =>
+                {
+                    ((Skjema)skjema).Melding!.Tags = "fromDataProcessor";
+                    return Task.CompletedTask;
+                }
+            );
+
+        var patch = new JsonPatch(
+            PatchOperation.Replace(JsonPointer.Create("melding", "name"), JsonNode.Parse("\"Ola Olsen\""))
+        );
+
+        var (_, _, parsedResponse) = await CallPatchApi<DataPatchResponse>(patch, null, HttpStatusCode.OK);
+
+        var newModel = parsedResponse.NewDataModel.Should().BeOfType<JsonElement>().Which.Deserialize<Skjema>()!;
+        newModel.Melding!.Tags.Should().Be("fromDataProcessor");
     }
 
     ~DataControllerPatchTests()

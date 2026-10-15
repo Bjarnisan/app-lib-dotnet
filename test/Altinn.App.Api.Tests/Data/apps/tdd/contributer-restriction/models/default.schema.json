@@ -1,3 +1,20 @@
 {
-    "$comment": "TODO: ensure content if required for test"
+    "$comment": "Only the parts of the data model that tests need",
+    "type": "object",
+    "properties": {
+        "melding": {
+            "$ref": "#/$defs/Dummy"
+        }
+    },
+    "$defs": {
+        "Dummy": {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "string",
+                    "readOnly": true
+                }
+            }
+        }
+    }
 }
