@@ -1,5 +1,5 @@
 {
-    "$comment": "Only the parts of the data model that tests need",
+    "$comment": "TODO: ensure content if required for test",
     "type": "object",
     "properties": {
         "melding": {

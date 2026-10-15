@@ -1116,7 +1116,7 @@ public class DataControllerPatchTests : ApiTestBase, IClassFixture<WebApplicatio
     [Theory]
     [InlineData(true, null)]
     [InlineData(false, "fromClient")]
-    public async Task ReadOnlyFieldInJsonSchema_KeepsStoredValueWhenEnforced(bool enforce, string? expectedTags)
+    public async Task ReadOnlyFieldInJsonSchema_KeepsStoredValue_OnlyWhenEnforced(bool enforce, string? expectedTags)
     {
         OverrideServicesForThisTest = services =>
             services.Configure<AppSettings>(settings => settings.EnforceJsonSchemaReadOnly = enforce);
