@@ -53,7 +53,7 @@ public class DataController : ControllerBase
     private readonly AppImplementationFactory _appImplementationFactory;
     private readonly IDataElementAccessChecker _dataElementAccessChecker;
     private readonly IFileService _fileService;
-    private readonly JsonSchemaReadOnlyFields _readOnlyFields;
+    private readonly JsonSchemaReadOnlyEnforcer _jsonSchemaReadOnlyEnforcer;
 
     private const long REQUEST_SIZE_LIMIT = 2000 * 1024 * 1024;
 
@@ -89,7 +89,7 @@ public class DataController : ControllerBase
         _fileService = serviceProvider.GetRequiredService<IFileService>();
         _appImplementationFactory = serviceProvider.GetRequiredService<AppImplementationFactory>();
         _dataElementAccessChecker = serviceProvider.GetRequiredService<IDataElementAccessChecker>();
-        _readOnlyFields = serviceProvider.GetRequiredService<JsonSchemaReadOnlyFields>();
+        _jsonSchemaReadOnlyEnforcer = serviceProvider.GetRequiredService<JsonSchemaReadOnlyEnforcer>();
     }
 
     /// <summary>
@@ -1082,7 +1082,7 @@ public class DataController : ControllerBase
         var oldServiceModel = await dataMutator.GetFormData(dataElement);
         // Keep the model from the client to return the changes made by the server
         var jsonFromClient = JsonSerializer.Serialize(serviceModel);
-        serviceModel = _readOnlyFields.RestoreReadOnlyFields(dataType, oldServiceModel, serviceModel);
+        serviceModel = _jsonSchemaReadOnlyEnforcer.RestoreReadOnlyFields(dataType, oldServiceModel, serviceModel);
         // Set the new service model so that dataAccessors see the new state
         dataMutator.SetFormData(dataElement, FormDataWrapperFactory.Create(serviceModel, dataType, dataElement));
 

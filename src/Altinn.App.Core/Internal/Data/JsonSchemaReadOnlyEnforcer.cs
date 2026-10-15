@@ -14,19 +14,19 @@ namespace Altinn.App.Core.Internal.Data;
 /// Keeps the stored value of fields marked <c>"readOnly": true</c> in the JSON schema of a data model when a client
 /// changes them, see <see cref="AppSettings.EnforceJsonSchemaReadOnly"/>.
 /// </summary>
-internal sealed class JsonSchemaReadOnlyFields
+internal sealed class JsonSchemaReadOnlyEnforcer
 {
     private readonly IAppResources _appResources;
     private readonly IAuthenticationContext _authenticationContext;
     private readonly IOptions<AppSettings> _appSettings;
-    private readonly ILogger<JsonSchemaReadOnlyFields> _logger;
+    private readonly ILogger<JsonSchemaReadOnlyEnforcer> _logger;
     private readonly ConcurrentDictionary<string, ReadOnlyNode?> _readOnlyNodes = new();
 
-    public JsonSchemaReadOnlyFields(
+    public JsonSchemaReadOnlyEnforcer(
         IAppResources appResources,
         IAuthenticationContext authenticationContext,
         IOptions<AppSettings> appSettings,
-        ILogger<JsonSchemaReadOnlyFields> logger
+        ILogger<JsonSchemaReadOnlyEnforcer> logger
     )
     {
         _appResources = appResources;
@@ -121,7 +121,7 @@ internal sealed class JsonSchemaReadOnlyFields
         foreach (var (name, child) in node.Properties)
         {
             JsonNode? previousValue = null;
-            bool previousHasValue = previous?.TryGetPropertyValue(name, out previousValue) ?? false;
+            bool previousHasProperty = previous?.TryGetPropertyValue(name, out previousValue) ?? false;
             current.TryGetPropertyValue(name, out var currentValue);
             var fieldPath = path.Length == 0 ? name : $"{path}.{name}";
 
@@ -129,7 +129,7 @@ internal sealed class JsonSchemaReadOnlyFields
             {
                 if (!JsonNode.DeepEquals(previousValue, currentValue))
                 {
-                    if (previousHasValue)
+                    if (previousHasProperty)
                     {
                         current[name] = previousValue?.DeepClone();
                     }
@@ -180,7 +180,7 @@ internal sealed class JsonSchemaReadOnlyFields
         private static ReadOnlyNode? FromSchema(
             JsonElement root,
             JsonElement schema,
-            HashSet<string> refsInPath,
+            HashSet<string> referencesInPath,
             List<string> listsWithReadOnlyFields,
             string path
         )
@@ -200,13 +200,19 @@ internal sealed class JsonSchemaReadOnlyFields
             if (
                 schema.TryGetProperty("$ref", out var reference)
                 && reference.GetString() is { } referencePath
-                && refsInPath.Add(referencePath)
+                && referencesInPath.Add(referencePath)
             )
             {
                 node.Merge(
-                    FromSchema(root, ResolveReference(root, referencePath), refsInPath, listsWithReadOnlyFields, path)
+                    FromSchema(
+                        root,
+                        ResolveReference(root, referencePath),
+                        referencesInPath,
+                        listsWithReadOnlyFields,
+                        path
+                    )
                 );
-                refsInPath.Remove(referencePath);
+                referencesInPath.Remove(referencePath);
             }
 
             foreach (var keyword in _combinationKeywords)
@@ -215,7 +221,7 @@ internal sealed class JsonSchemaReadOnlyFields
                 {
                     foreach (var subSchema in subSchemas.EnumerateArray())
                     {
-                        node.Merge(FromSchema(root, subSchema, refsInPath, listsWithReadOnlyFields, path));
+                        node.Merge(FromSchema(root, subSchema, referencesInPath, listsWithReadOnlyFields, path));
                     }
                 }
             }
@@ -225,7 +231,13 @@ internal sealed class JsonSchemaReadOnlyFields
                 foreach (var property in properties.EnumerateObject())
                 {
                     var propertyPath = path.Length == 0 ? property.Name : $"{path}.{property.Name}";
-                    var child = FromSchema(root, property.Value, refsInPath, listsWithReadOnlyFields, propertyPath);
+                    var child = FromSchema(
+                        root,
+                        property.Value,
+                        referencesInPath,
+                        listsWithReadOnlyFields,
+                        propertyPath
+                    );
                     if (child is not null)
                     {
                         node.MergeProperty(property.Name, child);
@@ -235,7 +247,7 @@ internal sealed class JsonSchemaReadOnlyFields
 
             if (
                 schema.TryGetProperty("items", out var items)
-                && FromSchema(root, items, refsInPath, [], $"{path}[]") is not null
+                && FromSchema(root, items, referencesInPath, [], $"{path}[]") is not null
             )
             {
                 listsWithReadOnlyFields.Add($"{path}[]");

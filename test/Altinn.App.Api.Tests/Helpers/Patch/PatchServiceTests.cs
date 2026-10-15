@@ -127,11 +127,11 @@ public sealed class PatchServiceTests : IDisposable
         services.Configure<GeneralSettings>(_ => { });
         services.AddSingleton(_hostEnvironment.Object);
         services.AddSingleton(
-            new JsonSchemaReadOnlyFields(
+            new JsonSchemaReadOnlyEnforcer(
                 _appResourcesMock.Object,
                 Mock.Of<IAuthenticationContext>(),
                 Options.Create(new AppSettings()),
-                NullLogger<JsonSchemaReadOnlyFields>.Instance
+                NullLogger<JsonSchemaReadOnlyEnforcer>.Instance
             )
         );
 
