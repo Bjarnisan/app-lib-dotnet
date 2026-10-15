@@ -53,6 +53,7 @@ public class DataController : ControllerBase
     private readonly AppImplementationFactory _appImplementationFactory;
     private readonly IDataElementAccessChecker _dataElementAccessChecker;
     private readonly IFileService _fileService;
+    private readonly JsonSchemaReadOnlyFields _readOnlyFields;
 
     private const long REQUEST_SIZE_LIMIT = 2000 * 1024 * 1024;
 
@@ -88,6 +89,7 @@ public class DataController : ControllerBase
         _fileService = serviceProvider.GetRequiredService<IFileService>();
         _appImplementationFactory = serviceProvider.GetRequiredService<AppImplementationFactory>();
         _dataElementAccessChecker = serviceProvider.GetRequiredService<IDataElementAccessChecker>();
+        _readOnlyFields = serviceProvider.GetRequiredService<JsonSchemaReadOnlyFields>();
     }
 
     /// <summary>
@@ -1078,6 +1080,9 @@ public class DataController : ControllerBase
 
         // Get the previous service model for dataProcessing to work
         var oldServiceModel = await dataMutator.GetFormData(dataElement);
+        // Keep the model from the client to return the changes made by the server
+        var jsonFromClient = JsonSerializer.Serialize(serviceModel);
+        serviceModel = _readOnlyFields.RestoreReadOnlyFields(dataType, oldServiceModel, serviceModel);
         // Set the new service model so that dataAccessors see the new state
         dataMutator.SetFormData(dataElement, FormDataWrapperFactory.Create(serviceModel, dataType, dataElement));
 
@@ -1093,7 +1098,6 @@ public class DataController : ControllerBase
         );
 
         // Run data processors keeping track of changes for diff return
-        var jsonBeforeDataProcessors = JsonSerializer.Serialize(serviceModel);
         await _patchService.RunDataProcessors(dataMutator, new DataElementChanges([requestedChange]), taskId, language);
         var jsonAfterDataProcessors = JsonSerializer.Serialize(serviceModel);
 
@@ -1113,10 +1117,10 @@ public class DataController : ControllerBase
         SelfLinkHelper.SetDataAppSelfLinks(instanceOwnerPartyId, instanceGuid, dataElement, Request);
         string dataUrl = dataElement.SelfLinks.Apps;
 
-        if (jsonBeforeDataProcessors != jsonAfterDataProcessors)
+        if (jsonFromClient != jsonAfterDataProcessors)
         {
-            // Return the changes caused by the data processors
-            var changedFields = JsonHelper.FindChangedFields(jsonBeforeDataProcessors, jsonAfterDataProcessors);
+            // Return the changes caused by read-only fields and the data processors
+            var changedFields = JsonHelper.FindChangedFields(jsonFromClient, jsonAfterDataProcessors);
             if (changedFields.Count > 0)
             {
                 CalculationResult calculationResult = new(dataElement) { ChangedFields = changedFields };

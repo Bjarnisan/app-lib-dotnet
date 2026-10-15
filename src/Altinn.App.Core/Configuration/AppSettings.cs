@@ -231,6 +231,12 @@ public class AppSettings
     public bool XsdValidation { get; set; }
 
     /// <summary>
+    /// Keep the stored value of fields marked <c>"readOnly": true</c> in the JSON schema of a data model when a client
+    /// changes them with PATCH or PUT. Data processors and the service owner can still change them.
+    /// </summary>
+    public bool EnforceJsonSchemaReadOnly { get; set; }
+
+    /// <summary>
     /// Enables OpenTelemetry as a substitute for Application Insights SDK
     /// Improves instrumentation throughout the Altinn app libraries.
     /// </summary>

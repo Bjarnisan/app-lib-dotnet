@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using Altinn.App.Api.Tests.Data;
 using Altinn.App.Api.Tests.Data.apps.tdd.contributer_restriction.models;
+using Altinn.App.Core.Configuration;
 using Altinn.App.Core.Constants;
 using Altinn.App.Core.Features;
 using Altinn.App.Core.Models;
@@ -291,5 +292,78 @@ public class DataController_PutTests : ApiTestBase, IClassFixture<WebApplication
             .Be("System.Text.Json.JsonException");
 
         TestData.DeleteInstanceAndData(org, app, instanceOwnerPartyId, instanceId);
+    }
+
+    [Fact]
+    public async Task PutDataElement_ReadOnlyFieldInJsonSchema_KeepsStoredValueAndReturnsChange()
+    {
+        OverrideServicesForThisTest = services =>
+            services.Configure<AppSettings>(settings => settings.EnforceJsonSchemaReadOnly = true);
+        string org = "tdd";
+        string app = "contributer-restriction";
+        int instanceOwnerPartyId = 501337;
+        HttpClient client = GetRootedClient(org, app);
+        string token = TestAuthentication.GetUserToken(1337, instanceOwnerPartyId);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(AuthorizationSchemes.Bearer, token);
+
+        _dataProcessor
+            .Setup(p =>
+                p.ProcessDataWrite(
+                    It.IsAny<Instance>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<object>(),
+                    It.IsAny<object>(),
+                    It.IsAny<string?>()
+                )
+            )
+            .Returns(Task.CompletedTask);
+        _dataProcessor
+            .Setup(p =>
+                p.ProcessDataRead(It.IsAny<Instance>(), It.IsAny<Guid>(), It.IsAny<object>(), It.IsAny<string?>())
+            )
+            .Returns(Task.CompletedTask);
+        _dataWriteProcessor
+            .Setup(p =>
+                p.ProcessDataWrite(
+                    It.IsAny<IInstanceDataMutator>(),
+                    It.IsAny<string>(),
+                    It.IsAny<DataElementChanges>(),
+                    It.IsAny<string?>()
+                )
+            )
+            .Returns(Task.CompletedTask);
+
+        // Create instance
+        var createResponse = await client.PostAsync(
+            $"{org}/{app}/instances/?instanceOwnerPartyId={instanceOwnerPartyId}",
+            null
+        );
+        var createResponseParsed = await VerifyStatusAndDeserialize<Instance>(createResponse, HttpStatusCode.Created);
+        var instanceId = createResponseParsed.Id;
+        var dataGuid = createResponseParsed.Data.First(x => x.DataType.Equals("default")).Id;
+
+        // Update data element, melding.tags is marked "readOnly": true in default.schema.json
+        using var updateDataElementContent = new StringContent(
+            """{"melding":{"name": "Ola Olsen", "tags": "fromClient"}}""",
+            System.Text.Encoding.UTF8,
+            "application/json"
+        );
+        var response = await client.PutAsync(
+            $"/{org}/{app}/instances/{instanceId}/data/{dataGuid}",
+            updateDataElementContent
+        );
+        var changes = await VerifyStatusAndDeserialize<CalculationResult>(response, HttpStatusCode.OK);
+        changes.ChangedFields.Should().ContainSingle().Which.Key.Should().Be("melding.tags");
+
+        // Verify stored data
+        var readDataElementResponse = await client.GetAsync($"/{org}/{app}/instances/{instanceId}/data/{dataGuid}");
+        var readDataElementResponseParsed = await VerifyStatusAndDeserialize<Skjema>(
+            readDataElementResponse,
+            HttpStatusCode.OK
+        );
+        readDataElementResponseParsed.Melding!.Name.Should().Be("Ola Olsen");
+        readDataElementResponseParsed.Melding.Tags.Should().BeNull();
+
+        TestData.DeleteInstanceAndData(org, app, instanceId);
     }
 }

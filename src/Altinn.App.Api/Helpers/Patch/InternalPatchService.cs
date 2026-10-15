@@ -25,6 +25,7 @@ public class InternalPatchService
     private readonly AppImplementationFactory _appImplementationFactory;
     private readonly Telemetry? _telemetry;
     private readonly IValidationService _validationService;
+    private readonly JsonSchemaReadOnlyFields _readOnlyFields;
 
     private static readonly JsonSerializerOptions _jsonSerializerOptions = new()
     {
@@ -46,6 +47,7 @@ public class InternalPatchService
         _hostingEnvironment = hostingEnvironment;
         _instanceDataUnitOfWorkInitializer = serviceProvider.GetRequiredService<InstanceDataUnitOfWorkInitializer>();
         _appImplementationFactory = serviceProvider.GetRequiredService<AppImplementationFactory>();
+        _readOnlyFields = serviceProvider.GetRequiredService<JsonSchemaReadOnlyFields>();
         _telemetry = telemetry;
     }
 
@@ -115,9 +117,9 @@ public class InternalPatchService
                 };
             }
 
-            var newModel = newModelResult.Ok;
-            // Reset dataAccessor to provide the patched model.
             var dataType = dataAccessor.GetDataType(dataElementIdentifier);
+            var newModel = _readOnlyFields.RestoreReadOnlyFields(dataType, oldModel, newModelResult.Ok);
+            // Reset dataAccessor to provide the patched model.
             dataAccessor.SetFormData(
                 dataElementIdentifier,
                 FormDataWrapperFactory.Create(newModel, dataType, dataElement)
