@@ -295,7 +295,7 @@ public class DataController_PutTests : ApiTestBase, IClassFixture<WebApplication
     }
 
     [Fact]
-    public async Task PutDataElement_ReadOnlyFieldInJsonSchema_KeepsStoredValueAndReturnsChange()
+    public async Task PutDataElement_ReadOnlyFieldInJsonSchema_KeepsStoredValueAndReturnsChangedField()
     {
         OverrideServicesForThisTest = services =>
             services.Configure<AppSettings>(settings => settings.EnforceJsonSchemaReadOnly = true);

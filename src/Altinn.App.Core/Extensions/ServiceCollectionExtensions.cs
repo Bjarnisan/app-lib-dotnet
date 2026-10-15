@@ -201,7 +201,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAuthenticationTokenResolver, AuthenticationTokenResolver>();
         services.AddTransient<IDataService, DataService>();
         services.AddSingleton<ModelSerializationService>();
-        services.TryAddSingleton<JsonSchemaReadOnlyFields>();
+        services.TryAddSingleton<JsonSchemaReadOnlyEnforcer>();
         services.Configure<Common.PEP.Configuration.PepSettings>(configuration.GetSection("PEPSettings"));
         services.Configure<Common.PEP.Configuration.PlatformSettings>(configuration.GetSection("PlatformSettings"));
         services.Configure<AccessTokenSettings>(configuration.GetSection("AccessTokenSettings"));

@@ -11,7 +11,7 @@ using Moq;
 
 namespace Altinn.App.Core.Tests.Internal.Data;
 
-public class JsonSchemaReadOnlyFieldsTests
+public class JsonSchemaReadOnlyEnforcerTests
 {
     private const string Schema = """
         {
@@ -51,15 +51,15 @@ public class JsonSchemaReadOnlyFieldsTests
     private readonly Mock<IAppResources> _appResources = new(MockBehavior.Strict);
     private readonly Mock<IAuthenticationContext> _authenticationContext = new(MockBehavior.Strict);
     private readonly AppSettings _appSettings = new() { EnforceJsonSchemaReadOnly = true };
-    private readonly FakeLogger<JsonSchemaReadOnlyFields> _logger = new();
+    private readonly FakeLogger<JsonSchemaReadOnlyEnforcer> _logger = new();
 
-    public JsonSchemaReadOnlyFieldsTests()
+    public JsonSchemaReadOnlyEnforcerTests()
     {
         _appResources.Setup(r => r.GetModelJsonSchema(_dataType.Id)).Returns(Schema);
         _authenticationContext.Setup(a => a.Current).Returns(TestAuthentication.GetUserAuthentication());
     }
 
-    private JsonSchemaReadOnlyFields CreateReadOnlyFields() =>
+    private JsonSchemaReadOnlyEnforcer CreateEnforcer() =>
         new(_appResources.Object, _authenticationContext.Object, Options.Create(_appSettings), _logger);
 
     private static Model CreateStoredModel() =>
@@ -80,7 +80,7 @@ public class JsonSchemaReadOnlyFieldsTests
         JsonSerializer.Deserialize<Model>(JsonSerializer.Serialize(model)) ?? throw new InvalidOperationException();
 
     [Fact]
-    public void RestoreReadOnlyFields_KeepsStoredReadOnlyFieldsAndAcceptsOtherChanges()
+    public void RestoreReadOnlyFields_RestoresChangedReadOnlyFields_AndKeepsOtherChanges()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
@@ -89,7 +89,7 @@ public class JsonSchemaReadOnlyFieldsTests
         fromClient.Submitter.Email = "kari@example.com";
         fromClient.Message = "Changed";
 
-        var result = (Model)CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Equal("Ola Nordmann", result.Submitter!.Name);
         Assert.Equal("01039012345", result.Submitter.NationalIdentityNumber);
@@ -102,27 +102,27 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_KeepsTheWholeObjectWhenItIsReadOnly()
+    public void RestoreReadOnlyFields_RestoresWholeObject_WhenObjectIsReadOnly()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Organisation!.Name = "Falsk AS";
 
-        var result = (Model)CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Equal("Testbedrift AS", result.Organisation!.Name);
         Assert.Equal("310000001", result.Organisation.Number);
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_KeepsReadOnlyFieldsWhenTheClientRemovesTheParent()
+    public void RestoreReadOnlyFields_RestoresReadOnlyFields_WhenClientRemovesParentObject()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Submitter = null;
         fromClient.Organisation = null;
 
-        var result = (Model)CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Equal("Ola Nordmann", result.Submitter!.Name);
         Assert.Equal("01039012345", result.Submitter.NationalIdentityNumber);
@@ -133,39 +133,39 @@ public class JsonSchemaReadOnlyFieldsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void RestoreReadOnlyFields_ClearsReadOnlyFieldsTheClientFillsIn(bool submitterIsStored)
+    public void RestoreReadOnlyFields_ClearsReadOnlyFields_WhenNoValueWasStored(bool submitterIsStored)
     {
         var stored = new Model { Submitter = submitterIsStored ? new Person() : null, Message = "Hello" };
         var fromClient = Copy(stored);
         fromClient.Submitter = new Person { Name = "Kari Nordmann", Email = "kari@example.com" };
 
-        var result = (Model)CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Null(result.Submitter!.Name);
         Assert.Equal("kari@example.com", result.Submitter.Email);
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_ReturnsTheSameObjectWhenNoReadOnlyFieldChanged()
+    public void RestoreReadOnlyFields_ReturnsSameModel_WhenNoReadOnlyFieldChanged()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Message = "Changed";
 
-        var result = CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Same(fromClient, result);
         Assert.DoesNotContain(_logger.Collector.GetSnapshot(), log => log.Message.StartsWith("Kept the stored value"));
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_KeepsChangesInsideListsAndLogsAWarning()
+    public void RestoreReadOnlyFields_KeepsChangesInsideLists_AndLogsWarning()
     {
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Rows![0].Amount = "200";
 
-        var result = (Model)CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Equal("200", result.Rows![0].Amount);
         Assert.Contains(
@@ -175,41 +175,41 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_DoesNothingWhenTheSettingIsOff()
+    public void RestoreReadOnlyFields_ReturnsSameModel_WhenSettingIsOff()
     {
         _appSettings.EnforceJsonSchemaReadOnly = false;
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Submitter!.Name = "Kari Nordmann";
 
-        var result = CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Same(fromClient, result);
         _appResources.Verify(r => r.GetModelJsonSchema(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_LetsTheServiceOwnerChangeReadOnlyFields()
+    public void RestoreReadOnlyFields_ReturnsSameModel_WhenServiceOwnerChangesReadOnlyFields()
     {
         _authenticationContext.Setup(a => a.Current).Returns(TestAuthentication.GetServiceOwnerAuthentication());
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Submitter!.Name = "Kari Nordmann";
 
-        var result = CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Same(fromClient, result);
     }
 
     [Fact]
-    public void RestoreReadOnlyFields_DoesNothingWhenTheDataTypeHasNoJsonSchema()
+    public void RestoreReadOnlyFields_ReturnsSameModel_WhenDataTypeHasNoJsonSchema()
     {
         _appResources.Setup(r => r.GetModelJsonSchema(_dataType.Id)).Throws<FileNotFoundException>();
         var stored = CreateStoredModel();
         var fromClient = Copy(stored);
         fromClient.Submitter!.Name = "Kari Nordmann";
 
-        var result = CreateReadOnlyFields().RestoreReadOnlyFields(_dataType, stored, fromClient);
+        var result = CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
 
         Assert.Same(fromClient, result);
         var log = Assert.Single(_logger.Collector.GetSnapshot());
@@ -217,7 +217,7 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void FromSchema_FindsReadOnlyFieldsThroughCombinationsAndRecursiveReferences()
+    public void FromSchema_FindsReadOnlyFields_ThroughCombinationsAndRecursiveReferences()
     {
         using var schema = JsonDocument.Parse(
             """
@@ -250,7 +250,7 @@ public class JsonSchemaReadOnlyFieldsTests
         );
         List<string> listsWithReadOnlyFields = [];
 
-        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, listsWithReadOnlyFields);
+        var node = JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, listsWithReadOnlyFields);
 
         // The recursion stops at the reference that is already being followed, so guardian is left out,
         // and address has no read-only fields
@@ -262,7 +262,7 @@ public class JsonSchemaReadOnlyFieldsTests
     }
 
     [Fact]
-    public void FromSchema_MergesTheReadOnlyPropertiesOfEachSubschema()
+    public void FromSchema_MergesReadOnlyProperties_FromEachSubschema()
     {
         using var schema = JsonDocument.Parse(
             """
@@ -275,7 +275,7 @@ public class JsonSchemaReadOnlyFieldsTests
             """
         );
 
-        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []);
+        var node = JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, []);
 
         Assert.NotNull(node);
         var contact = Assert.Single(node.Properties).Value;
@@ -285,23 +285,23 @@ public class JsonSchemaReadOnlyFieldsTests
     [Theory]
     [InlineData("other.schema.json#/$defs/Person")]
     [InlineData("#/$defs/Missing")]
-    public void FromSchema_ThrowsOnReferencesItCannotResolve(string reference)
+    public void FromSchema_ThrowsJsonException_WhenReferenceCannotBeResolved(string reference)
     {
         using var schema = JsonDocument.Parse(
             $$"""{ "properties": { "person": { "$ref": "{{reference}}" } }, "$defs": {} }"""
         );
 
-        Assert.Throws<JsonException>(() => JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []));
+        Assert.Throws<JsonException>(() => JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, []));
     }
 
     [Fact]
-    public void FromSchema_ReturnsNullWhenNothingIsReadOnly()
+    public void FromSchema_ReturnsNull_WhenNothingIsReadOnly()
     {
         using var schema = JsonDocument.Parse(
             """{ "properties": { "name": { "type": "string" }, "anything": true } }"""
         );
 
-        var node = JsonSchemaReadOnlyFields.ReadOnlyNode.FromSchema(schema.RootElement, []);
+        var node = JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, []);
 
         Assert.Null(node);
     }
