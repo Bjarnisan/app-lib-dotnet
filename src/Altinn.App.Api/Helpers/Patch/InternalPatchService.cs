@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Altinn.App.Api.Extensions;
 using Altinn.App.Api.Models;
 using Altinn.App.Core.Features;
+using Altinn.App.Core.Features.DataProcessing;
 using Altinn.App.Core.Internal.Data;
 using Altinn.App.Core.Internal.Validation;
 using Altinn.App.Core.Models;

@@ -8,7 +8,7 @@ using Altinn.Platform.Storage.Interface.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Altinn.App.Core.Internal.Data;
+namespace Altinn.App.Core.Features.DataProcessing;
 
 /// <summary>
 /// Keeps the stored value of fields marked <c>"readOnly": true</c> in the JSON schema of a data model when a client
@@ -20,19 +20,22 @@ internal sealed class JsonSchemaReadOnlyEnforcer
     private readonly IAuthenticationContext _authenticationContext;
     private readonly IOptions<AppSettings> _appSettings;
     private readonly ILogger<JsonSchemaReadOnlyEnforcer> _logger;
+    private readonly Telemetry? _telemetry;
     private readonly ConcurrentDictionary<string, ReadOnlyNode?> _readOnlyNodes = new();
 
     public JsonSchemaReadOnlyEnforcer(
         IAppResources appResources,
         IAuthenticationContext authenticationContext,
         IOptions<AppSettings> appSettings,
-        ILogger<JsonSchemaReadOnlyEnforcer> logger
+        ILogger<JsonSchemaReadOnlyEnforcer> logger,
+        Telemetry? telemetry = null
     )
     {
         _appResources = appResources;
         _authenticationContext = authenticationContext;
         _appSettings = appSettings;
         _logger = logger;
+        _telemetry = telemetry;
     }
 
     /// <summary>
@@ -55,6 +58,7 @@ internal sealed class JsonSchemaReadOnlyEnforcer
             return currentModel;
         }
 
+        using var activity = _telemetry?.StartRestoreReadOnlyFieldsActivity();
         var previous = SerializeToJsonObject(previousModel);
         var current = SerializeToJsonObject(currentModel);
         var restoredFields = new List<string>();
@@ -245,12 +249,18 @@ internal sealed class JsonSchemaReadOnlyEnforcer
                 }
             }
 
-            if (
-                schema.TryGetProperty("items", out var items)
-                && FromSchema(root, items, referencesInPath, [], $"{path}[]") is not null
-            )
+            if (schema.TryGetProperty("items", out var items))
             {
-                listsWithReadOnlyFields.Add($"{path}[]");
+                var itemsNode = FromSchema(root, items, referencesInPath, [], $"{path}[]");
+                if (itemsNode is { IsReadOnly: true })
+                {
+                    // Studio saves "readOnly" on a list in its items, so read-only items keep the whole list
+                    node.IsReadOnly = true;
+                }
+                else if (itemsNode is not null)
+                {
+                    listsWithReadOnlyFields.Add($"{path}[]");
+                }
             }
 
             return node.IsReadOnly || node.Properties.Count > 0 ? node : null;
@@ -258,6 +268,11 @@ internal sealed class JsonSchemaReadOnlyEnforcer
 
         private static JsonElement ResolveReference(JsonElement root, string referencePath)
         {
+            if (referencePath == "#")
+            {
+                return root;
+            }
+
             if (!referencePath.StartsWith("#/", StringComparison.Ordinal))
             {
                 throw new JsonException($"Only local references are supported in a data model schema: {referencePath}");

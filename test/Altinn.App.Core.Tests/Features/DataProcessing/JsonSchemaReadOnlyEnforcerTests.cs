@@ -2,14 +2,13 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Altinn.App.Core.Configuration;
 using Altinn.App.Core.Features.Auth;
+using Altinn.App.Core.Features.DataProcessing;
 using Altinn.App.Core.Internal.App;
-using Altinn.App.Core.Internal.Data;
 using Altinn.Platform.Storage.Interface.Models;
 using Microsoft.Extensions.Logging.Testing;
-using Microsoft.Extensions.Options;
 using Moq;
 
-namespace Altinn.App.Core.Tests.Internal.Data;
+namespace Altinn.App.Core.Tests.Features.DataProcessing;
 
 public class JsonSchemaReadOnlyEnforcerTests
 {
@@ -59,8 +58,14 @@ public class JsonSchemaReadOnlyEnforcerTests
         _authenticationContext.Setup(a => a.Current).Returns(TestAuthentication.GetUserAuthentication());
     }
 
-    private JsonSchemaReadOnlyEnforcer CreateEnforcer() =>
-        new(_appResources.Object, _authenticationContext.Object, Options.Create(_appSettings), _logger);
+    private JsonSchemaReadOnlyEnforcer CreateEnforcer(TelemetrySink? telemetry = null) =>
+        new(
+            _appResources.Object,
+            _authenticationContext.Object,
+            Microsoft.Extensions.Options.Options.Create(_appSettings),
+            _logger,
+            telemetry?.Object
+        );
 
     private static Model CreateStoredModel() =>
         new()
@@ -174,6 +179,47 @@ public class JsonSchemaReadOnlyEnforcerTests
         );
     }
 
+    [Theory]
+    [InlineData("""{ "type": "array", "readOnly": true, "items": { "$ref": "#/$defs/Row" } }""")]
+    [InlineData("""{ "type": "array", "items": { "$ref": "#/$defs/Row", "readOnly": true } }""")]
+    public void RestoreReadOnlyFields_RestoresWholeList_WhenListOrItsItemsAreReadOnly(string rowsSchema)
+    {
+        _appResources
+            .Setup(r => r.GetModelJsonSchema(_dataType.Id))
+            .Returns(
+                $$"""
+                {
+                    "properties": { "rows": {{rowsSchema}} },
+                    "$defs": { "Row": { "properties": { "amount": { "type": "string" } } } }
+                }
+                """
+            );
+        var stored = CreateStoredModel();
+        var fromClient = Copy(stored);
+        fromClient.Rows![0].Amount = "200";
+        fromClient.Rows.Add(new Row { AltinnRowId = Guid.NewGuid(), Amount = "300" });
+
+        var result = (Model)CreateEnforcer().RestoreReadOnlyFields(_dataType, stored, fromClient);
+
+        var row = Assert.Single(result.Rows!);
+        Assert.Equal("100", row.Amount);
+        Assert.DoesNotContain(_logger.Collector.GetSnapshot(), log => log.Message.Contains("not supported"));
+    }
+
+    [Fact]
+    public void RestoreReadOnlyFields_StartsActivity_WhenReadOnlyFieldsAreChecked()
+    {
+        using var telemetry = new TelemetrySink();
+        var stored = CreateStoredModel();
+
+        CreateEnforcer(telemetry).RestoreReadOnlyFields(_dataType, stored, Copy(stored));
+
+        Assert.Contains(
+            telemetry.CapturedActivities,
+            activity => activity.OperationName == "JsonSchemaReadOnlyEnforcer.RestoreReadOnlyFields"
+        );
+    }
+
     [Fact]
     public void RestoreReadOnlyFields_ReturnsSameModel_WhenSettingIsOff()
     {
@@ -259,6 +305,20 @@ public class JsonSchemaReadOnlyEnforcerTests
         var name = Assert.Single(person.Properties).Value;
         Assert.True(name.IsReadOnly);
         Assert.Empty(listsWithReadOnlyFields);
+    }
+
+    [Fact]
+    public void FromSchema_FindsReadOnlyFields_ThroughReferenceToRoot()
+    {
+        using var schema = JsonDocument.Parse(
+            """{ "properties": { "name": { "readOnly": true }, "parent": { "$ref": "#" } } }"""
+        );
+
+        var node = JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, []);
+
+        Assert.NotNull(node);
+        Assert.True(node.Properties["name"].IsReadOnly);
+        Assert.True(node.Properties["parent"].Properties["name"].IsReadOnly);
     }
 
     [Fact]
