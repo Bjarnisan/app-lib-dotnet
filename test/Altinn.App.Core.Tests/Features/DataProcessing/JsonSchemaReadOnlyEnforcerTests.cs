@@ -358,7 +358,15 @@ public class JsonSchemaReadOnlyEnforcerTests
     public void FromSchema_ReturnsNull_WhenNothingIsReadOnly()
     {
         using var schema = JsonDocument.Parse(
-            """{ "properties": { "name": { "type": "string" }, "anything": true } }"""
+            """
+            {
+                "properties": {
+                    "name": { "type": "string" },
+                    "anything": true,
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+            """
         );
 
         var node = JsonSchemaReadOnlyEnforcer.ReadOnlyNode.FromSchema(schema.RootElement, []);
